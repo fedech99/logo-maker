@@ -3,172 +3,184 @@ from PIL import Image, ImageOps
 import tempfile
 import os
 
-# --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Editor Foto & Video", layout="centered")
-st.title("🎨 Editor Foto & Video Pro")
+# --- CONFIGURAZIONE PAGINA (Layout Wide per "Photoshop feel") ---
+st.set_page_config(page_title="Pro Watermarker", layout="wide")
 
-# --- FUNZIONI UTILI ---
-def resize_image(image, width, height):
-    """Ridimensiona l'immagine aggiungendo bordi (pad) per non tagliare nulla."""
-    return ImageOps.pad(image, (width, height), color='white', centering=(0.5, 0.5))
+# --- CSS CUSTOM PER MIGLIORARE L'INTERFACCIA ---
+st.markdown("""
+<style>
+    .stApp {background-color: #0e1117;} /* Sfondo scuro Pro */
+    .stButton>button {width: 100%; border-radius: 5px; font-weight: bold;} 
+    /* Rimuove padding eccessivo in alto */
+    .block-container {padding-top: 2rem;}
+</style>
+""", unsafe_allow_html=True)
 
-def apply_watermark(base, watermark, position, scale, opacity):
-    """Applica il logo sulla base (foto o frame video)."""
-    # 1. Calcola dimensioni logo
-    base_w, base_h = base.size
-    logo_w = int(base_w * (scale / 100))
-    aspect_ratio = watermark.width / watermark.height
-    logo_h = int(logo_w / aspect_ratio)
-    
-    # Evita errori se il logo diventa piccolissimo
-    if logo_w < 1 or logo_h < 1:
-        return base
+# --- GESTIONE STATO (MEMORIA) ---
+if 'last_upload' not in st.session_state:
+    st.session_state.last_upload = None
+if 'target_w' not in st.session_state:
+    st.session_state.target_w = 1080
+if 'target_h' not in st.session_state:
+    st.session_state.target_h = 1080
 
-    # 2. Ridimensiona Logo
-    wm = watermark.resize((logo_w, logo_h), Image.Resampling.LANCZOS)
+# --- SIDEBAR (PANNELLO CONTROLLI) ---
+with st.sidebar:
+    st.title("🎛️ Pannello Controlli")
     
-    # 3. Applica Opacità
-    if wm.mode != 'RGBA':
-        wm = wm.convert('RGBA')
+    st.info("1. CARICA ASSETS")
+    logo_file = st.file_uploader("Carica Logo (PNG)", type=['png', 'jpg'])
     
-    # Crea una nuova immagine per l'opacità
-    alpha = wm.split()[3]
-    alpha = alpha.point(lambda p: p * opacity)
-    wm.putalpha(alpha)
-    
-    # 4. Calcola Posizione
-    padding = int(base_w * 0.05) # 5% di margine
-    
-    if position == "Basso Destra":
-        pos = (base_w - logo_w - padding, base_h - logo_h - padding)
-    elif position == "Basso Sinistra":
-        pos = (padding, base_h - logo_h - padding)
-    elif position == "Alto Destra":
-        pos = (base_w - logo_w - padding, padding)
-    elif position == "Alto Sinistra":
-        pos = (padding, padding)
-    else: # Centro
-        pos = ((base_w - logo_w) // 2, (base_h - logo_h) // 2)
+    # Anteprima piccolina del logo nel pannello
+    logo_img = None
+    if logo_file:
+        logo_img = Image.open(logo_file)
+        st.image(logo_img, width=100, caption="Logo Attivo")
         
-    # 5. Incolla
-    # Creiamo una copia trasparente grande come la base per fare il merge
-    layer = Image.new('RGBA', base.size, (0,0,0,0))
-    layer.paste(wm, pos)
+        st.divider()
+        st.info("2. POSIZIONE E STILE")
+        
+        col_s1, col_s2 = st.columns(2)
+        with col_s1:
+            opacity = st.slider("Opacità", 0.1, 1.0, 0.9)
+        with col_s2:
+            scale = st.slider("Grandezza %", 5, 100, 20)
+            
+        position = st.selectbox("Posizione", 
+            ["Basso Destra", "Basso Sinistra", "Alto Destra", "Alto Sinistra", "Centro"])
+        
+        margin_val = st.slider("Margine dai bordi (px)", 0, 200, 50)
+
+# --- AREA PRINCIPALE ---
+st.write("### 🖼️ Area di Lavoro")
+
+tab_foto, tab_video = st.tabs(["FOTO EDITOR", "VIDEO LAB"])
+
+# === LOGICA FOTO ===
+with tab_foto:
+    uploaded_photo = st.file_uploader("Trascina qui la tua foto", type=['jpg', 'jpeg', 'png', 'webp'])
     
-    return Image.alpha_composite(base.convert('RGBA'), layer).convert('RGB')
-
-# --- SIDEBAR: LOGO ---
-st.sidebar.header("1. Carica il Logo")
-logo_file = st.sidebar.file_uploader("Scegli il file PNG del logo", type=['png', 'jpg'])
-
-logo_img = None
-if logo_file:
-    logo_img = Image.open(logo_file)
-    st.sidebar.image(logo_img, width=150, caption="Anteprima Logo")
-    st.sidebar.divider()
-    st.sidebar.subheader("Regolazioni Logo")
-    opacity = st.sidebar.slider("Opacità", 0.1, 1.0, 0.9)
-    scale = st.sidebar.slider("Grandezza (%)", 5, 80, 20)
-    position = st.sidebar.selectbox("Posizione", 
-        ["Basso Destra", "Basso Sinistra", "Alto Destra", "Alto Sinistra", "Centro"])
-else:
-    st.sidebar.warning("⚠️ Carica prima il logo!")
-
-# --- TABS PRINCIPALI ---
-tab1, tab2 = st.tabs(["📸 FOTO", "🎬 VIDEO"])
-
-# === TAB FOTO ===
-with tab1:
-    st.header("Modifica Foto")
-    uploaded_photo = st.file_uploader("Carica foto", type=['jpg', 'jpeg', 'png', 'webp'])
-    
-    if uploaded_photo and logo_img:
+    if uploaded_photo:
         image = Image.open(uploaded_photo)
         
-        st.subheader("Ridimensionamento (Pixel)")
-        col1, col2 = st.columns(2)
-        with col1:
-            target_w = st.number_input("Larghezza (W)", value=1080, step=1)
-        with col2:
-            target_h = st.number_input("Altezza (H)", value=1350, step=1) # Default portrait
-            
-        # Pulsante anteprima
-        base_resized = resize_image(image, target_w, target_h)
-        
-        # Applicazione Logo
-        final_image = apply_watermark(base_resized, logo_img, position, scale, opacity)
-        
-        st.image(final_image, caption="Anteprima Risultato")
-        
-        # Download
-        import io
-        buf = io.BytesIO()
-        final_image.save(buf, format="JPEG", quality=100)
-        st.download_button("⬇️ Scarica Foto", data=buf.getvalue(), file_name="foto_editata.jpg", mime="image/jpeg")
+        # --- AUTO-RILEVAMENTO DIMENSIONI ORIGINALI ---
+        # Se è un nuovo file, aggiorniamo le dimensioni nello stato
+        if uploaded_photo != st.session_state.last_upload:
+            st.session_state.last_upload = uploaded_photo
+            st.session_state.target_w = image.width
+            st.session_state.target_h = image.height
+            st.rerun() # Ricarica per aggiornare i campi
 
-# === TAB VIDEO ===
-with tab2:
-    st.header("Modifica Video")
-    uploaded_video = st.file_uploader("Carica video (MP4/MOV)", type=['mp4', 'mov'])
+        # Controlli Dimensioni (messi qui per essere vicini all'immagine)
+        st.markdown("#### 📏 Dimensioni Output")
+        col_res1, col_res2, col_res3 = st.columns([1,1,2])
+        with col_res1:
+            new_w = st.number_input("Larghezza (px)", value=st.session_state.target_w, step=1)
+        with col_res2:
+            new_h = st.number_input("Altezza (px)", value=st.session_state.target_h, step=1)
+        with col_res3:
+            st.write(" ")
+            st.caption(f"Originale: {image.width}x{image.height}")
+
+        # --- ELABORAZIONE ---
+        if logo_img:
+            # 1. Ridimensiona Base
+            base = ImageOps.pad(image, (new_w, new_h), color='white', centering=(0.5, 0.5))
+            
+            # 2. Prepara Logo
+            wm = logo_img.copy()
+            
+            # Calcolo grandezza logo basato sulla larghezza della foto FINALE
+            target_logo_w = int(new_w * (scale / 100))
+            wm_ratio = wm.width / wm.height
+            target_logo_h = int(target_logo_w / wm_ratio)
+            
+            if target_logo_w > 0 and target_logo_h > 0:
+                wm = wm.resize((target_logo_w, target_logo_h), Image.Resampling.LANCZOS)
+                
+                # Opacità
+                if wm.mode != 'RGBA': wm = wm.convert('RGBA')
+                alpha = wm.split()[3]
+                alpha = alpha.point(lambda p: p * opacity)
+                wm.putalpha(alpha)
+                
+                # Posizione (con margine custom)
+                if position == "Basso Destra":
+                    pos = (new_w - target_logo_w - margin_val, new_h - target_logo_h - margin_val)
+                elif position == "Basso Sinistra":
+                    pos = (margin_val, new_h - target_logo_h - margin_val)
+                elif position == "Alto Destra":
+                    pos = (new_w - target_logo_w - margin_val, margin_val)
+                elif position == "Alto Sinistra":
+                    pos = (margin_val, margin_val)
+                else:
+                    pos = ((new_w - target_logo_w)//2, (new_h - target_logo_h)//2)
+                
+                # Unione
+                canvas = Image.new('RGBA', base.size, (0,0,0,0))
+                canvas.paste(wm, pos)
+                final_image = Image.alpha_composite(base.convert('RGBA'), canvas).convert('RGB')
+            else:
+                final_image = base.convert('RGB')
+                
+            # Mostra risultato GRANDE
+            st.image(final_image, caption=f"Anteprima {new_w}x{new_h}", use_column_width=True)
+            
+            # Download
+            import io
+            buf = io.BytesIO()
+            final_image.save(buf, format="JPEG", quality=100)
+            st.download_button("💾 SALVA FOTO", data=buf.getvalue(), file_name="foto_pro.jpg", mime="image/jpeg", type="primary")
+        else:
+            st.image(image, caption="Immagine Originale (Carica un logo per modificare)", use_column_width=True)
+
+# === LOGICA VIDEO ===
+with tab_video:
+    st.write("⚠️ **Nota:** Il limite upload è aumentato, ma file > 500MB potrebbero essere lenti.")
+    uploaded_video = st.file_uploader("Carica Video", type=['mp4', 'mov'])
     
     if uploaded_video and logo_img:
-        st.info("💡 I video richiedono tempo. Attendi la fine dell'elaborazione.")
-        
-        if st.button("🎬 Elabora Video"):
-            with st.spinner("Sto lavorando sul video... non chiudere la pagina..."):
+        if st.button("RENDERIZZA VIDEO (Start)"):
+            with st.spinner("Rendering in corso... (non chiudere la pagina)"):
                 try:
-                    # Importa qui per evitare errori se la libreria manca
                     from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
                     
-                    # Salva video temporaneo
                     tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
                     tfile.write(uploaded_video.read())
-                    
-                    # Carica clip
                     clip = VideoFileClip(tfile.name)
                     
-                    # --- PREPARAZIONE LOGO PER VIDEO ---
-                    # Calcoliamo le dimensioni in pixel basandoci sul video
+                    # Logica Logo
                     vid_w, vid_h = clip.size
-                    logo_target_w = int(vid_w * (scale / 100))
-                    ar = logo_img.width / logo_img.height
-                    logo_target_h = int(logo_target_w / ar)
+                    logo_w = int(vid_w * (scale / 100))
+                    ratio = logo_img.width / logo_img.height
+                    logo_h = int(logo_w / ratio)
                     
-                    # Ridimensiona logo con PIL
-                    wm_resized = logo_img.resize((logo_target_w, logo_target_h), Image.Resampling.LANCZOS)
-                    # Applica opacità
-                    wm_resized.putalpha(wm_resized.split()[3].point(lambda p: p * opacity))
+                    wm_res = logo_img.resize((logo_w, logo_h), Image.Resampling.LANCZOS)
+                    wm_res.putalpha(wm_res.split()[3].point(lambda p: p * opacity))
+                    wm_path = tempfile.mktemp(suffix=".png")
+                    wm_res.save(wm_path)
                     
-                    # Salva logo temporaneo per MoviePy
-                    logo_temp_path = tempfile.mktemp(suffix=".png")
-                    wm_resized.save(logo_temp_path)
+                    # Mapping posizione semplificato per MoviePy
+                    pos_map = {
+                        "Basso Destra": ("right", "bottom"), "Basso Sinistra": ("left", "bottom"),
+                        "Alto Destra": ("right", "top"), "Alto Sinistra": ("left", "top"),
+                        "Centro": ("center", "center")
+                    }
                     
-                    # Crea clip logo
-                    watermark_clip = (ImageClip(logo_temp_path)
-                                      .set_duration(clip.duration)
-                                      .set_pos(position.lower().replace(" ", "_").replace("basso", "bottom").replace("alto", "top").replace("destra", "right").replace("sinistra", "left")))
-                                      
-                    # Se posizionamento automatico non piace, usiamo coordinate relative
-                    # (Qui uso la logica semplificata di moviepy 'bottom', 'right' ecc)
+                    watermark = (ImageClip(wm_path)
+                                 .set_duration(clip.duration)
+                                 .set_pos(pos_map[position])
+                                 .set_opacity(opacity)) # MoviePy opacity
+                                 
+                    final = CompositeVideoClip([clip, watermark])
+                    out_path = tempfile.mktemp(suffix=".mp4")
                     
-                    # Composizione
-                    final = CompositeVideoClip([clip, watermark_clip])
+                    # Preset 'ultrafast' per evitare crash su server piccoli
+                    final.write_videofile(out_path, codec="libx264", preset="ultrafast", audio_codec="aac", temp_audiofile='temp-audio.m4a', remove_temp=True, verbose=False, logger=None)
                     
-                    # Output
-                    output_path = tempfile.mktemp(suffix=".mp4")
-                    final.write_videofile(output_path, codec="libx264", audio_codec="aac", temp_audiofile='temp-audio.m4a', remove_temp=True, verbose=False, logger=None)
-                    
-                    # Mostra e Scarica
-                    st.success("Fatto!")
-                    st.video(output_path)
-                    
-                    with open(output_path, "rb") as file:
-                        btn = st.download_button(
-                            label="⬇️ Scarica Video",
-                            data=file,
-                            file_name="video_con_logo.mp4",
-                            mime="video/mp4"
-                        )
+                    st.video(out_path)
+                    with open(out_path, "rb") as f:
+                        st.download_button("💾 SCARICA VIDEO", f, "video_pro.mp4", "video/mp4")
                         
                 except Exception as e:
                     st.error(f"Errore: {e}")
