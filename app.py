@@ -35,13 +35,16 @@ def load_local_logos():
                 except: pass
     return logos
 
-def calculate_position(W, H, w, h, pos_name, margin):
+def calculate_position(W, H, w, h, pos_name, margin_percent):
     """
-    Funzione matematica che calcola X e Y basandosi sul margine.
-    W, H = Dimensioni Sfondo
-    w, h = Dimensioni Logo
+    Calcola la posizione basandosi sulla PERCENTUALE delle dimensioni.
+    Rende il margine identico visivamente su foto 4K e video 720p.
     """
-    m = int(margin)
+    # Calcola il margine in pixel basato sulla grandezza dell'immagine/video
+    # Usiamo il lato più piccolo per avere coerenza
+    ref_size = min(W, H)
+    m = int(ref_size * (margin_percent / 100))
+    
     x, y = 0, 0
     
     if pos_name == "Basso Destra":
@@ -62,8 +65,9 @@ def calculate_position(W, H, w, h, pos_name, margin):
         
     return (x, y)
 
-def process_image(image, logo, pos_name, scale, opacity, margin):
+def process_image(image, logo, pos_name, scale, opacity, margin_pct):
     """Elaborazione FOTO"""
+    # Resize preventivo per sicurezza RAM
     if image.width > 2500 or image.height > 2500:
         image.thumbnail((2500, 2500), Image.Resampling.LANCZOS)
         
@@ -82,23 +86,20 @@ def process_image(image, logo, pos_name, scale, opacity, margin):
     alpha = alpha.point(lambda p: p * opacity)
     wm.putalpha(alpha)
     
-    # Calcolo Posizione usando la funzione comune
-    x, y = calculate_position(base_w, base_h, target_w, target_h, pos_name, margin)
+    # Calcolo Posizione (Percentuale)
+    x, y = calculate_position(base_w, base_h, target_w, target_h, pos_name, margin_pct)
     
     canvas = Image.new('RGBA', image.size, (0,0,0,0))
     canvas.paste(wm, (x, y))
     return Image.alpha_composite(image.convert('RGBA'), canvas).convert('RGB')
 
-def process_video_pixel_perfect(tfile_path, logo, pos_name, scale, opacity, margin):
-    """
-    Versione VIDEO con MARGINE REALE.
-    """
+def process_video_pixel_perfect(tfile_path, logo, pos_name, scale, opacity, margin_pct):
+    """Versione VIDEO"""
     from moviepy.editor import VideoFileClip, ImageClip, CompositeVideoClip
     
     clip = VideoFileClip(tfile_path)
     W, H = clip.size 
     
-    # Logo Setup
     logo_w = int(W * (scale / 100))
     ratio = logo.width / logo.height
     logo_h = int(logo_w / ratio)
@@ -113,11 +114,9 @@ def process_video_pixel_perfect(tfile_path, logo, pos_name, scale, opacity, marg
     logo_path = tempfile.mktemp(suffix=".png")
     pil_logo.save(logo_path)
     
-    # --- QUI STA LA MAGIA ---
-    # Invece di dire "bottom", calcoliamo i pixel esatti col margine
-    pos_coords = calculate_position(W, H, logo_w, logo_h, pos_name, margin)
+    # Calcolo Posizione (Percentuale)
+    pos_coords = calculate_position(W, H, logo_w, logo_h, pos_name, margin_pct)
     
-    # Se è "Centro", MoviePy preferisce la stringa, altrimenti usiamo le coordinate
     if pos_name == "Centro":
         final_pos = ("center", "center")
     else:
@@ -155,11 +154,13 @@ with st.sidebar:
         opacity = st.slider("Opacità", 0.1, 1.0, 0.9)
         position = st.selectbox("Posizione", ["Basso Destra", "Basso Sinistra", "Alto Destra", "Alto Sinistra", "Centro"])
         
-        # ORA FUNZIONA PER TUTTI
-        margin = st.slider("Margine dai bordi (Pixel)", 0, 300, 50) 
+        # NUOVO CURSORE MARGINE
+        st.divider()
+        margin_pct = st.slider("Margine dai bordi (%)", 0, 20, 5) 
+        st.caption("Usa il 5% per un look standard, 0% per incollarlo al bordo.")
 
 # --- MAIN ---
-st.title("📂 Media Editor (Pixel Perfect & Margini)")
+st.title("📂 Logo Applicator (Smart Margins)")
 
 if active_logo:
     with st.form("main_form"):
@@ -182,7 +183,7 @@ if active_logo:
             st.subheader(f"🖼️ Foto ({len(images)})")
             cols = st.columns(3)
             for i, f in enumerate(images):
-                res = process_image(Image.open(f), active_logo, position, scale, opacity, margin)
+                res = process_image(Image.open(f), active_logo, position, scale, opacity, margin_pct)
                 buf = io.BytesIO()
                 res.save(buf, format='JPEG', quality=95)
                 proc_imgs.append((f"logo_{f.name}", buf.getvalue()))
@@ -203,8 +204,7 @@ if active_logo:
                 tfile.write(v.read())
                 
                 try:
-                    # Passiamo il margine anche qui!
-                    out = process_video_pixel_perfect(tfile.name, active_logo, position, scale, opacity, margin)
+                    out = process_video_pixel_perfect(tfile.name, active_logo, position, scale, opacity, margin_pct)
                     with open(out, "rb") as f:
                         proc_vids.append((f"logo_{v.name}", f.read()))
                     st.video(out)
