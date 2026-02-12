@@ -6,7 +6,7 @@ import zipfile
 import io
 
 # --- CONFIGURAZIONE ---
-st.set_page_config(page_title="Logo Applicator Pro", layout="wide")
+st.set_page_config(page_title="Logo Applicator", layout="wide")
 
 st.markdown("""
 <style>
@@ -37,7 +37,7 @@ def load_local_logos():
 
 def process_image(image, logo, pos_name, scale, opacity, margin):
     """Elaborazione FOTO"""
-    # Resize preventivo per sicurezza RAM
+    # Resize preventivo per sicurezza RAM su mobile
     if image.width > 2500 or image.height > 2500:
         image.thumbnail((2500, 2500), Image.Resampling.LANCZOS)
         
@@ -80,7 +80,7 @@ def process_image(image, logo, pos_name, scale, opacity, margin):
     canvas.paste(wm, (x, y))
     return Image.alpha_composite(image.convert('RGBA'), canvas).convert('RGB')
 
-def process_video_pixel_perfect(tfile_path, logo, pos_name, scale, opacity, margin):
+def process_video_pixel_perfect(tfile_path, logo, pos_name, scale, opacity):
     """
     Versione VIDEO con coordinate manuali per evitare resize indesiderati.
     """
@@ -106,28 +106,21 @@ def process_video_pixel_perfect(tfile_path, logo, pos_name, scale, opacity, marg
     logo_path = tempfile.mktemp(suffix=".png")
     pil_logo.save(logo_path)
     
-    # 3. CALCOLO COORDINATE ESATTE (Come per le foto)
-    # MoviePy accetta (x, y) come tuple.
-    m = int(margin)
+    # 3. Posizionamento Video (Usa posizioni relative di MoviePy per semplicità ma su canvas bloccato)
+    pos_map = {
+        "Basso Destra": ("right", "bottom"),
+        "Basso Sinistra": ("left", "bottom"),
+        "Alto Destra": ("right", "top"),
+        "Alto Sinistra": ("left", "top"),
+        "Centro": ("center", "center")
+    }
     
-    if pos_name == "Basso Destra":
-        pos_coords = (W - logo_w - m, H - logo_h - m)
-    elif pos_name == "Basso Sinistra":
-        pos_coords = (m, H - logo_h - m)
-    elif pos_name == "Alto Destra":
-        pos_coords = (W - logo_w - m, m)
-    elif pos_name == "Alto Sinistra":
-        pos_coords = (m, m)
-    else: # Centro
-        pos_coords = ("center", "center") # Qui ci fidiamo di moviepy per il centro
-    
-    # 4. Creazione Logo Clip
     watermark = (ImageClip(logo_path)
                  .set_duration(clip.duration)
-                 .set_pos(pos_coords) # Usiamo le coordinate pixel, NON stringhe tipo 'bottom'
+                 .set_pos(pos_map[pos_name]) 
                  .set_opacity(opacity))
     
-    # 5. Composizione BLOCCATA
+    # 4. Composizione BLOCCATA
     # size=(W,H) obbliga il video finale a essere grande quanto l'originale
     final = CompositeVideoClip([clip, watermark], size=(W, H))
     
@@ -164,11 +157,10 @@ with st.sidebar:
         scale = st.slider("Grandezza %", 5, 80, 20)
         opacity = st.slider("Opacità", 0.1, 1.0, 0.9)
         position = st.selectbox("Posizione", ["Basso Destra", "Basso Sinistra", "Alto Destra", "Alto Sinistra", "Centro"])
-        # Ora il margine funziona anche per i video!
-        margin = st.slider("Margine (Pixel)", 0, 200, 50)
+        margin = st.slider("Margine (Solo Foto)", 0, 200, 50)
 
 # --- MAIN ---
-st.title("📂 Media Editor (Pixel Perfect)")
+st.title("📂 Media Editor (Original Size)")
 
 if active_logo:
     with st.form("main_form"):
@@ -187,27 +179,40 @@ if active_logo:
         total_steps = len(images) + (len(videos) * 3)
         curr_step = 0
         
-        # FOTO
+        # --- FOTO (Con Griglia Anteprima) ---
         if images:
-            for f in images:
+            st.subheader(f"🖼️ Foto ({len(images)})")
+            # Creiamo 3 colonne per la griglia
+            cols = st.columns(3)
+            
+            for i, f in enumerate(images):
+                # Elabora
                 res = process_image(Image.open(f), active_logo, position, scale, opacity, margin)
+                
+                # Salva buffer
                 buf = io.BytesIO()
                 res.save(buf, format='JPEG', quality=95)
                 proc_imgs.append((f"logo_{f.name}", buf.getvalue()))
+                
+                # MOSTRA ANTEPRIMA (Era questo che mancava!)
+                with cols[i % 3]:
+                    st.image(res, use_column_width=True)
+                
                 curr_step += 1
                 prog.progress(min(curr_step/total_steps, 1.0))
                 
-        # VIDEO
+        # --- VIDEO ---
         if videos:
             st.divider()
+            st.subheader(f"🎬 Video ({len(videos)})")
             for v in videos:
-                st.info(f"Video: {v.name} (Sto calcolando la posizione esatta...)")
+                st.info(f"Video: {v.name} (Sto calcolando...)")
                 tfile = tempfile.NamedTemporaryFile(delete=False, suffix=".mp4")
                 tfile.write(v.read())
                 
                 try:
                     # Funzione Pixel Perfect
-                    out = process_video_pixel_perfect(tfile.name, active_logo, position, scale, opacity, margin)
+                    out = process_video_pixel_perfect(tfile.name, active_logo, position, scale, opacity)
                     with open(out, "rb") as f:
                         proc_vids.append((f"logo_{v.name}", f.read()))
                     st.video(out)
@@ -217,7 +222,7 @@ if active_logo:
                 curr_step += 3
                 prog.progress(min(curr_step/total_steps, 1.0))
 
-        # ZIP FINALE
+        # --- ZIP FINALE ---
         if proc_imgs or proc_vids:
             st.success("Tutto pronto!")
             zip_buffer = io.BytesIO()
